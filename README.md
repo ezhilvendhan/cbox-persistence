@@ -5,7 +5,7 @@ An ExtJS plugin to persist checkbox selections across pages, while using Ext.ux.
 [You can get PagingMemoryProxy from ux folder in extjs installation]
 
 The requisites are : ExtJs Grid with a store using pagingmemoryproxy, 
-  				 Checkbox selection model.
+					 Checkbox selection model.
 
 
 Allows checkbox selection persistence in a grid, across pages. Make sure the grid uses a CheckboxModel 
@@ -28,8 +28,14 @@ The Following methods will be added to the underlying CheckboxModel object:
 Installation
 ============
 `````javascript
+var userStore = Ext.create('Ext.data.ArrayStore', {
+        ...
+        data: __data,
+        proxy: {
+            type: 'pagingmemory'
+	    }
+});
 Ext.create('Ext.grid.Panel', {
-        id: 'gridPanel',
         store: userStore,
         ....
         plugins: ['checkboxselpersistence'],
