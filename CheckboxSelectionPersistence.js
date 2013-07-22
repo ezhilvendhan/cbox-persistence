@@ -28,23 +28,33 @@ Ext.define('Ext.ux.grid.CheckboxSelectionPersistence', {
 
     init : function(grid) {
         var me = this;
-        me._validate(grid);
-        me._totalRecords = me._getTotalData(grid.getStore().getProxy());
-        me._initProxy = grid.getStore().getProxy();
-        /*
-            Adding the following methods on to the grid object:
-            1. getSelection() - returns the selected records (Ext.data.Model) across pages in an array
-            2. getSelectedData - returns selected data across pages in an array
-            3. loadProxyData - void. Updates data on to the underlying PagingMemoryProxy and loads the first page
-            4. totalSelection - Number. Returns the total number of data selected across the pages
-        */
-        grid.getSelection = me._getSelectedRecords;
-        grid.getSelectedData = me._getSelectedData;
+        me.validatePluginUsage(grid);
+        me.totalRecordsAcrossAllPages = me.getTotalDataInTheProxy(grid.getStore().getProxy());
+        me.proxyCreatedInitiallyDuringGridCreation = grid.getStore().getProxy();
+        me.addFunctionsToGrid(grid, me);
+        me.overrideGridStoreLoadDataFn(grid);
+        me.addFunctionsToGridCheckboxModel(grid, me);
+        me.thisGrid = grid;
+        me.bindListeners();
+    },
+    destroy: function() {
+        var me = this;
+        me.resetAllPluginVariables();
+        me.unbindListeners();
+    },
+    addFunctionsToGrid: function(grid, me) {
+        grid.getSelection = me.getSelectedRecords;
+        grid.getSelectedData = me.getSelectedData;
+        me.addLoadProxyDataFn(grid, me);
+        me.addGetTotalSelectionFn(grid, me);
+    },
+    addLoadProxyDataFn: function(grid, me) {
         grid.loadProxyData = function(data, sorters, filters) {
             var proxy = grid.getStore().getProxy();
             proxy.data = data;
             var store = grid.getStore();
-            proxy.read(new Ext.data.Operation(Ext.apply({
+            proxy.read(new Ext.data.Operation(Ext.apply(
+                          {
                       action: 'update'
                   },
                   {
@@ -52,15 +62,21 @@ Ext.define('Ext.ux.grid.CheckboxSelectionPersistence', {
                       sorters: sorters || store.sorters.items
                   }
                   )),
-                  //callback
                   function(){
-                      me._totalRecords = me._getTotalData(store.getProxy());
+                      me.totalRecordsAcrossAllPages = me.getTotalDataInTheProxy(store.getProxy());
                   },
-                  proxy //scope
+                  proxy
             );
-            me._enableOrDisableFunctionalities(grid);
+            me.enableOrDisableRefreshButton(grid);
             store.loadPage(1);
         };
+    },
+    addGetTotalSelectionFn: function(grid, me) {
+        grid.getTotalSelection = function() {
+            return me.totalSelectionsAcrossAllPages;
+        }
+    },
+    overrideGridStoreLoadDataFn: function(grid) {
         grid.getStore().loadData = function(data, append) {
             if(append) {
                 var proxy = grid.getStore().getProxy();
@@ -70,21 +86,12 @@ Ext.define('Ext.ux.grid.CheckboxSelectionPersistence', {
             }
             grid.loadProxyData(data);
         };
-        grid.getTotalSelection = function() {
-            return me._totalSelection;
-        }
-        /*
-            Adding the following methods on to the CheckboxModel object:
-            1. selectAllPages() - selects all records across pages. Ensure that this method is called
-                                  instead of the CheckboxModel's selectAll() to select all records
-                                  across pages. CheckboxModel's method can still be used to select all records
-                                  on the current page but NOT across pages.
-            2. deselectAllPages - Deselects all records across pages. Ensure that this method is called
-                                  instead of the CheckboxModel's deselectAll() to deselect all records
-                                  across pages. CheckboxModel's method can still be used to deselect all records
-                                  on the current page but NOT across pages.
-        */
-        //Adding  selectAllPages()
+    },
+    addFunctionsToGridCheckboxModel: function(grid, me) {
+        me.addSelectAllPagesFn(grid, me);
+        me.addDeselectAllFn(grid, me);
+    },
+    addSelectAllPagesFn: function(grid, me) {
         var selectAllFn = grid.getSelectionModel().selectAll;
         grid.getSelectionModel().selectAllPages = function() {
             selectAllFn.apply(grid.getSelectionModel(),
@@ -95,65 +102,48 @@ Ext.define('Ext.ux.grid.CheckboxSelectionPersistence', {
                 me._selectAll(grid.getStore(),
                         records, 0, 1,
                         grid.getStore().getPageFromRecordIndex(allData.length));
-                me._isAllSelected = true;
+                me.isAllRecordsSelectedAcrossPages = true;
             }
             var selModel = grid.getSelectionModel();
             selModel.fireEvent('selectionchange', selModel, records);
         };
-        //Adding  deselectAllPages()
+    },
+    addDeselectAllFn: function(grid, me) {
         var deselectAllFn = grid.getSelectionModel().deselectAll;
         grid.getSelectionModel().deselectAllPages = function() {
             deselectAllFn.apply(grid.getSelectionModel(),
                     Array.prototype.slice.call(arguments, 0));
-            me._deselectAll();
+            me.deselectAllRecordsAcrossPages();
             var selModel = grid.getSelectionModel();
             selModel.fireEvent('selectionchange', selModel, []);
         };
-
-        me._grid = grid;
-        me.bindListeners();
-    },
-    destroy: function() {
-        var me = this;
-        me._resetVariables();
-        me.unbindListeners();
     },
     bindListeners: function() {
         var me = this;
-        //bind grid listeners
-        me._bindGridListeners();
-
-        //bindgrid store listeners
-        me._bindStoreListeners();
-
-        //selectionmodel listeners
-        me._bindSelModelListeners();
-
-        //pagingtoolbar listeners
-        me._bindPagingToolbarListeners();
+        me.bindGridListeners();
+        me.bindStoreListeners();
+        me.bindSelectionModelListeners();
+        me.bindPagingToolbarListeners();
     },
     unbindListeners: function() {
         var me = this;
-        //unbind grid listeners
-        me._unbindGridListeners()
-
-        //unbindgrid store listeners
-        me._unbindStoreListeners();
-
-        //unbinding selectionmodel listeners
-        me._unbindSelModelListeners();
-
-        //unbinding pagingtoolbar listeners
-        me._unbindPagingToolbarListeners();
+        me.unbindGridListeners()
+        me.unbindStoreListeners();
+        me.unbindSelectionModelListeners();
+        me.unbindPagingToolbarListeners();
     },
-    /**
-     *Functions and variables declared below are strictly for the class' private use
-     */
-    _validate: function(grid) {
+    validatePluginUsage: function(grid) {
+    	var me = this;
+        me.isTheGridMadeOfCheckboxModel(grid);
+        me.isTheGridMadeOfPagingMemoryProxy(grid);
+    },
+    isTheGridMadeOfCheckboxModel: function(grid) {
         if(! (grid.getSelectionModel() instanceof Ext.selection.CheckboxModel)) {
             throw "The Ext.ux.grid.CheckboxSelectionPersistence plugin is "+
                             "compatible only with a Grid using Ext.selection.CheckboxModel";
         }
+    },
+    isTheGridMadeOfPagingMemoryProxy: function(grid) {
         if(! (grid.getStore().getProxy() instanceof Ext.ux.data.PagingMemoryProxy)) {
             throw "The Ext.ux.grid.CheckboxSelectionPersistence plugin is "+
                             "compatible only with a Store using Ext.ux.data.PagingMemoryProxy";
@@ -168,239 +158,236 @@ Ext.define('Ext.ux.grid.CheckboxSelectionPersistence', {
             while((page === store.getPageFromRecordIndex(idx)) &&
                         idx < record.length) {
                 //Adding the record to this class' selection object
-                me._addSelection(i++, record[idx++], page);
+                me.addRecordToCache(i++, record[idx++], page);
             }
-            //recursive call until the end of all records
             me._selectAll.call(me, store, record, idx, ++page, totalPages);
         }
     },
-    _deselectAll: function () {
+    deselectAllRecordsAcrossPages: function () {
         var me = this;
-        me._resetVariables();
+        me.resetAllPluginVariables();
     },
-    _resetVariables: function() {
+    resetAllPluginVariables: function() {
         //resetting all the internal data objects
         var me = this;
-        me._isViewRefresh = false;
-        me._previousSelection = me._selection;
-        me._selection = {};
-        me._totalSelection = 0;
-        me._totalRecords = 0;
-        me._isAllSelected = false;
-        me._selectedData = [];
+        me.isRefreshNotByRefreshButton = false;
+        me.previousSelectionCache = me.selectionCache;
+        me.selectionCache = {};
+        me.totalSelectionsAcrossAllPages = 0;
+        me.totalRecordsAcrossAllPages = 0;
+        me.isAllRecordsSelectedAcrossPages = false;
+        me.selectedDataObjectsAcrossPages = [];
     },
-    _bindGridListeners: function() {
+    bindGridListeners: function() {
         var me = this,
-            grid = me._grid;
-        grid.mon(
-                grid, me._getListenerMap().grid);
+            grid = me.thisGrid;
+        grid.mon(grid, me.getGridListeners());
     },
-    _bindSelModelListeners: function() {
+    bindSelectionModelListeners: function() {
         var me = this,
-            selModel = me._grid.getSelectionModel();
-        selModel.mon(
-                selModel, me._getListenerMap().selModel);
+            selModel = me.thisGrid.getSelectionModel();
+        selModel.mon(selModel, me.getSelectionModelListeners());
     },
-    _bindPagingToolbarListeners: function() {
+    bindPagingToolbarListeners: function() {
         var me = this,
-            pagingToolbar = me._grid.getDockedItems('pagingtoolbar')[0];
-        pagingToolbar.mon(
-                pagingToolbar, me._getListenerMap().paginToolbar);
-        //Adding toolbar on click of refresh button
-        var refreshBtn = pagingToolbar.child('#refresh');
-        refreshBtn.mon(refreshBtn,
-                me._getListenerMap().pagingToolbarRefresh);
+            pagingToolbar = me.thisGrid.getDockedItems('pagingtoolbar')[0];
+        pagingToolbar.mon(pagingToolbar, me.getPagingToolbarListeners());
+        me.bindPagingToolbarRefreshBtnListeners(pagingToolbar, me);
     },
-    _bindStoreListeners: function() {
+    bindPagingToolbarRefreshBtnListeners: function(pagingToolbar, me) {
+    	var refreshBtn = pagingToolbar.child('#refresh');
+        refreshBtn.mon(refreshBtn,me.getPagingToolbarRefreshBtnListeners());
+    }, 
+    bindStoreListeners: function() {
         var me = this,
-            store = me._grid.getStore();
-        store.mon(
-                store, me._getListenerMap().store);
+            store = me.thisGrid.getStore();
+        store.mon(store, me.getStoreListeners());
     },
-    _unbindGridListeners: function() {
+    unbindGridListeners: function() {
         var me = this,
-            grid = me._grid;
-        grid.mun(
-                grid, me._getListenerMap().grid);
+            grid = me.thisGrid;
+        grid.mun(grid, me.getGridListeners());
     },
-    _unbindSelModelListeners: function() {
+    unbindSelectionModelListeners: function() {
         var me = this,
-            selModel = me._grid.getSelectionModel();
-        selModel.mun(
-                selModel, me._getListenerMap().selModel);
+            selModel = me.thisGrid.getSelectionModel();
+        selModel.mun(selModel, me.getSelectionModelListeners());
     },
-    _unbindPagingToolbarListeners: function() {
+    unbindPagingToolbarListeners: function() {
         var me = this,
-            pagingToolbar = me._grid.getDockedItems('pagingtoolbar')[0];
-        pagingToolbar.mun(
-                pagingToolbar, me._getListenerMap().paginToolbar);
-
-        var refreshBtn = pagingToolbar.child('#refresh');
-        refreshBtn.mun(refreshBtn,
-                me._getListenerMap().pagingToolbarRefresh);
+            pagingToolbar = me.thisGrid.getDockedItems('pagingtoolbar')[0];
+        pagingToolbar.mun(pagingToolbar, me.getPagingToolbarListeners());
+		me.unbindPagingToolbarRefreshBtnListeners(pagingToolbar, me);
     },
-    _unbindStoreListeners: function() {
+    unbindPagingToolbarRefreshBtnListeners: function(pagingToolbar, me) {
+    	var refreshBtn = pagingToolbar.child('#refresh');
+        refreshBtn.mun(refreshBtn, me.getPagingToolbarRefreshBtnListeners());
+    },
+    unbindStoreListeners: function() {
         var me = this,
-            store = me._grid.getStore();
-        store.mun(
-                store, me._getListenerMap().store);
+            store = me.thisGrid.getStore();
+        store.mun(store, me.getStoreListeners());
     },
-    _getListenerMap: function() {
-        var me = this;
-        //returns a simple listener Map containing all the listeners used by this class.
-        return {
-            grid: {
-                sortchange: function(headerCt, col, dir, eOpts) {
-                    var sorter = new Ext.util.Sorter({property: col, direction: dir});
-                    me._resetVariables();
-                    me._grid.loadProxyData(me._initProxy.data,sorter,null);
-                }
-            },
-            selModel: {
-                beforeselect: function(rowModel, record, idx, eOpts) {
-                    if(idx < 0) {
-                        return false;
-                    }
-                },
-                select : function(rowModel, record, idx, eOpts) {
-                    me._addSelection(idx, record, me._grid.getStore().currentPage);
-                    //Once all records get selected
-                    if(me._totalRecords === me._totalSelection) {
-                        me._isAllSelected = true;
-                    }
-                },
-                deselect : function (rowModel, record, idx, eOpts) {
-                    if(!me._isViewRefresh) {
-                        me._removeSelection(idx);
-                        me._isAllSelected = false;
-                    }
-                },
-                scope: me
-            },
-            paginToolbar: {
-                  beforechange: function(toolbar, page, eOpts) {
-                      me._isViewRefresh = true;
-                  },
-                  change : function(toolbar, page, eOpts) {
-                        me._enableOrDisableFunctionalities();
-                        me._totalRecords = me._getTotalData(me._grid.getStore().getProxy());
-                        me._isViewRefresh = false;
-                        //Upon each page change, records' checkboxes are selected, if already selected
-                        if(!Ext.isEmpty(me._selection) && page
-                                && page.currentPage) {
-                            if(me._isNotSelectionModelLocked()) {
-                                me._doSelect(page.currentPage);
-                            } else {
-                                me._grid.getSelectionModel().setLocked(false);
-                                Ext.defer(function() { me._grid.getSelectionModel().setLocked(true)}, 1);
-                                var totalDataInCurrentPage = me._grid.getStore().data ? me._grid.getStore().data.length : 0;
-                                me._selectAllinThePage(totalDataInCurrentPage);
-                            }
-                        }
-                  },
-                  render: function() {
-                        me._resetVariables();
-                  },
-                  scope: me
-            },
-            pagingToolbarRefresh: {
-                  click: function() {
-                        //vetoing refresh action if the selection model is locked
-                        if(me._isNotSelectionModelLocked()) {
-                            me._resetVariables();
-                            return true;
-                        } 
-                        return false;
-                        
-                  }
-            },
-            store: {
-                beforeload: function(store, records, isOpSuccessful, eOpts) {
-                    me._isViewRefresh = true;
-                },
-                load: function(store, records, isOpSuccessful, eOpts) {
-                    me._totalRecords = me._getTotalData(store.getProxy());
-                    me._grid.getView().refresh();
-                    me._isViewRefresh = false;
-                },
-                scope: me
+    getGridListeners: function() {
+    	var me = this;
+    	return {
+            sortchange: function(headerCt, col, dir, eOpts) {
+                var sorter = new Ext.util.Sorter({property: col, direction: dir});
+                me.resetAllPluginVariables();
+                me.thisGrid.loadProxyData(me.proxyCreatedInitiallyDuringGridCreation.data,sorter,null);
             }
         };
     },
-    _doSelect: function(pageNo) {
+    getSelectionModelListeners: function() {
+    	var me = this;
+    	return {
+            beforeselect: function(rowModel, record, idx, eOpts) {
+                if(idx < 0) {
+                    return false;
+                }
+            },
+            select : function(rowModel, record, idx, eOpts) {
+                me.addRecordToCache(idx, record, me.thisGrid.getStore().currentPage);
+                //Once all records get selected
+                if(me.totalRecordsAcrossAllPages === me.totalSelectionsAcrossAllPages) {
+                    me.isAllRecordsSelectedAcrossPages = true;
+                }
+            },
+            deselect : function (rowModel, record, idx, eOpts) {
+                if(!me.isRefreshNotByRefreshButton) {
+                    me.removeRecordFromCache(idx);
+                    me.isAllRecordsSelectedAcrossPages = false;
+                }
+            },
+            scope: me
+        };
+    },
+    getPagingToolbarListeners: function() {
+    	var me = this;
+    	return {
+              beforechange: function(toolbar, page, eOpts) {
+                  me.isRefreshNotByRefreshButton = true;
+              },
+              change : function(toolbar, page, eOpts) {
+                    me.enableOrDisableRefreshButton();
+                    me.totalRecordsAcrossAllPages = me.getTotalDataInTheProxy(me.thisGrid.getStore().getProxy());
+                    me.isRefreshNotByRefreshButton = false;
+                    if(!Ext.isEmpty(me.selectionCache) && page && page.currentPage) {
+                        if(me.isNotSelectionModelLocked()) {
+                            me.selectExistingSelectionsInPage(page.currentPage);
+                        } else {
+                            me.thisGrid.getSelectionModel().setLocked(false);
+                            Ext.defer(function() { me.thisGrid.getSelectionModel().setLocked(true)}, 1);
+                            var totalDataInCurrentPage = me.thisGrid.getStore().data ? me.thisGrid.getStore().data.length : 0;
+                            me.selectAllRecordsInThePage(totalDataInCurrentPage);
+                        }
+                    }
+              },
+              render: function() {
+                    me.resetAllPluginVariables();
+              },
+              scope: me
+        };
+    
+    },
+    getPagingToolbarRefreshBtnListeners: function() {
+    	var me = this;
+    	return {
+              click: function() {
+                    //vetoing refresh action if the selection model is locked
+                    if(me.isNotSelectionModelLocked()) {
+                        me.resetAllPluginVariables();
+                        return true;
+                    } 
+                    return false;  
+              }
+        };
+    },
+    getStoreListeners: function() {
+    	 var me = this;
+    	 return {
+            beforeload: function(store, records, isOpSuccessful, eOpts) {
+                me.isRefreshNotByRefreshButton = true;
+            },
+            load: function(store, records, isOpSuccessful, eOpts) {
+                me.totalRecordsAcrossAllPages = me.getTotalDataInTheProxy(store.getProxy());
+                me.thisGrid.getView().refresh();
+                me.isRefreshNotByRefreshButton = false;
+            },
+            scope: me
+        };
+    },
+    selectExistingSelectionsInPage: function(pageNo) {
         var me = this,
-            sel = me._selection[pageNo];
+            sel = me.selectionCache[pageNo];
         if(! Ext.isEmpty(sel)) {
             for(var key in sel) {
                 var idxNo = parseInt(key);
-                me._grid.getSelectionModel().select(idxNo, true, true);
+                me.thisGrid.getSelectionModel().select(idxNo, true, true);
             }
         }
     },
-    _selectAllinThePage: function(totalRecords) {
+    selectAllRecordsInThePage: function(totalRecords) {
         var me = this;
         for(var idx = 0; idx < totalRecords; idx++) {
-            me._grid.getSelectionModel().select(idx, true, true);
+            me.thisGrid.getSelectionModel().select(idx, true, true);
         }
     },
-    _addSelection: function(idx, record, page) {
+    addRecordToCache: function(idx, record, page) {
         var me = this,
-            pageObj = me._selection[page];
+            pageObj = me.selectionCache[page];
         if(! pageObj) {
             pageObj = {};
         }
         if(Ext.isEmpty(pageObj[idx])) {
-            ++me._totalSelection;
+            ++me.totalSelectionsAcrossAllPages;
         }
         pageObj[idx] = record;
-        me._selection[page] = pageObj;
+        me.selectionCache[page] = pageObj;
     },
-    _removeSelection: function(idx) {
+    removeRecordFromCache: function(idx) {
         var me = this,
-            page = me._grid.getStore().currentPage;
-        var pageObj = me._selection[page];
+            page = me.thisGrid.getStore().currentPage;
+        var pageObj = me.selectionCache[page];
         if(pageObj) {
             delete pageObj[idx];
-            --me._totalSelection;
+            --me.totalSelectionsAcrossAllPages;
         }
     },
-    _getSelectedRecords: function() {
-        //scope used : grid
+    getSelectedRecords: function() {
         var me = this.getPlugin("checkboxSelectionPersistence"),
             records = [];
-        for(var pageKey in me._selection) {
-            for(var key in me._selection[pageKey]) {
-                 var tmp = me._selection[pageKey];
+        for(var pageKey in me.selectionCache) {
+            for(var key in me.selectionCache[pageKey]) {
+                 var tmp = me.selectionCache[pageKey];
                  records.push(tmp[key]);
             }
         }
         return records;
     },
-    _getSelectedData: function() {
-        //Scope used: grid
+    getSelectedData: function() {
         var me = this.getPlugin("checkboxSelectionPersistence"),
             records = [];
-        for(var pageKey in me._selection) {
-            for(var key in me._selection[pageKey]) {
-                 var tmp = me._selection[pageKey];
+        for(var pageKey in me.selectionCache) {
+            for(var key in me.selectionCache[pageKey]) {
+                 var tmp = me.selectionCache[pageKey];
                  records.push(tmp[key].data);
             }
         }
-        //returns array of data objects
         return records;
     },
-    _isNotSelectionModelLocked : function() {
+    isNotSelectionModelLocked : function() {
         var me = this;
-        return ! me._grid.getSelectionModel().isLocked();
+        return ! me.thisGrid.getSelectionModel().isLocked();
     },
-    _getTotalData: function(proxy) {
+    getTotalDataInTheProxy: function(proxy) {
         return proxy.data ? proxy.data.length : 0;
     },
-    _enableOrDisableFunctionalities: function(grid) {
+    enableOrDisableRefreshButton: function(grid) {
         var me = this,
-            grid = grid || me._grid,
+            grid = grid || me.thisGrid,
             toolbar = grid.getDockedItems('pagingtoolbar')[0];
-        if(me._isNotSelectionModelLocked()) {
+        if(me.isNotSelectionModelLocked()) {
             toolbar.child('#refresh').enable();
             if(grid.headerCt) {
                 grid.headerCt.setDisabled(false);
@@ -412,27 +399,18 @@ Ext.define('Ext.ux.grid.CheckboxSelectionPersistence', {
             }
         }
     },
-    _isRefreshButtonEnabled: function() {
+    isRefreshButtonEnabled: function() {
         var me = this;
-        return ! (me._grid.getDockedItems('pagingtoolbar')[0]
+        return ! (me.thisGrid.getDockedItems('pagingtoolbar')[0]
                                         .child('#refresh').isDisabled());
     },
-    //underlying grid component using this plugin
-    _grid: null,
-    //internal object that stores the data  as: {<page_no> : {<idx_within_the_page> : <Ext.data.Model>} }
-    _selection: {},
-    //flag to differentiate between data refresh using refresh button and grid view refresh
-    _isViewRefresh: false,
-    //stores previous _selection object
-    _previousSelection: {},
-    //flag to indicate if all records are selected
-    _isAllSelected: false,
-    //total number of records across all pages in the grid
-    _totalRecords: 0,
-    //total selections made across all pages in the grid
-    _totalSelection: 0,
-    //store the an array of selected data objects
-    _selectedData: [],
-    //initial proxy during grid creation
-    _initProxy: null
+    thisGrid: null,
+    selectionCache: {}, //Format: {<page_no> : {<idx_within_the_page> : <Ext.data.Model>} }
+    isRefreshNotByRefreshButton: false,
+    previousSelectionCache: {},//stores previous selectionCache object
+    isAllRecordsSelectedAcrossPages: false,
+    totalRecordsAcrossAllPages: 0,
+    totalSelectionsAcrossAllPages: 0,
+    selectedDataObjectsAcrossPages: [],
+    proxyCreatedInitiallyDuringGridCreation: null
 });
